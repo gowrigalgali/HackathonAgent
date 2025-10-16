@@ -16,6 +16,7 @@ from agents import (
     presentation_agent,
     supervisor_chain,
     AgentName,
+    SupervisorOutput,
     human_in_the_loop_node
 )
 def _to_role_content(msg_obj):
@@ -152,20 +153,35 @@ def run_supervisor(state):
         AgentName.PRESENTATION.value,
         AgentName.HUMAN_IN_THE_LOOP.value,
     ]
+
     normalized_msgs = normalize_messages_for_langchain(state.get("messages", []))
+
+    # Invoke supervisor chain
     result = supervisor_chain.invoke({
         "messages": normalized_msgs,
         "agent_names": ", ".join(agent_names)
     })
 
-    # Normalize supervisor output
+    # 🧩 Handle structured output properly
+    if isinstance(result, SupervisorOutput):
+        state["next_agent"] = result.next_agent.value
+        assistant_message = {
+            "role": "assistant",
+            "content": result.response
+        }
+        state["messages"].append(assistant_message)
+
+        print(f"[SUPERVISOR] → Next agent: {state['next_agent']}")
+        print(f"[SUPERVISOR] → Response: {result.response[:100]}...\n")
+
+        return {"messages": [assistant_message]}
+
+    # 🧯 Fallback: non-structured or unexpected response
     normalized = normalize_agent_output(result)
     state["messages"].extend(normalized)
-
-    # Optional debugging
-    print(f"[SUPERVISOR] → {normalized[0]['content'][:120]}...\n")
-
+    state["next_agent"] = AgentName.FINISH.value  # stop safely
     return {"messages": normalized}
+
 
 
 # Define the conditional routing for the supervisor
