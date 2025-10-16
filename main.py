@@ -31,6 +31,8 @@ def main():
 
         # Stream the output from the graph
         for s in app.stream(state, config=config):
+            print("🧩 Starting workflow...\n")
+
             # The 'app.stream' yields the state change at each node.
             # Find the value that was added or updated to print it.
             for key, value in s.items():

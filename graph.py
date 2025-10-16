@@ -67,39 +67,64 @@ def normalize_messages_for_langchain(state_messages):
         normalized.append({"role": "user", "content": str(item)})
 
     return normalized
+import json
+from langchain_core.messages import AIMessage
+
+def normalize_agent_output(result):
+    """
+    Clean up various agent.invoke() output formats to a simple list of messages.
+    Handles nested JSON strings and LangChain Message objects.
+    """
+    # Case 1: already a dict with "messages"
+    if isinstance(result, dict) and "messages" in result:
+        out = []
+        for m in result["messages"]:
+            if hasattr(m, "content"):
+                out.append({"role": "assistant", "content": m.content})
+            elif isinstance(m, dict) and "content" in m:
+                out.append({"role": "assistant", "content": m["content"]})
+            else:
+                out.append({"role": "assistant", "content": str(m)})
+        return out
+
+    # Case 2: dict with 'output'
+    if isinstance(result, dict) and "output" in result:
+        return [{"role": "assistant", "content": str(result["output"])}]
+
+    # Case 3: plain string or JSON string
+    if isinstance(result, str):
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict) and "content" in parsed:
+                return [{"role": "assistant", "content": parsed["content"]}]
+            if isinstance(parsed, list):
+                return [{"role": "assistant", "content": str(p)} for p in parsed]
+            return [{"role": "assistant", "content": str(parsed)}]
+        except Exception:
+            return [{"role": "assistant", "content": result}]
+
+    # Case 4: Message object
+    if hasattr(result, "content"):
+        return [{"role": "assistant", "content": result.content}]
+
+    # Fallback
+    return [{"role": "assistant", "content": str(result)}]
 
 # Define helper to run an agent node
 def run_agent_node(agent, state: AgentState):
-    # Prepare canonical messages for the agent
     canonical_msgs = normalize_messages_for_langchain(state["messages"])
-
-    # Pass messages into agent invocation — some agents accept role/content dicts or Message objects
-    # Here we pass the list of dicts; adapt if your agent expects Message objects.
     result = agent.invoke({"messages": canonical_msgs})
+    normalized = normalize_agent_output(result)
 
-    # agent.invoke may return a dict with 'messages' and 'output', or an AIMessage, or text.
-    assistant_content = None
-    # If result is a dict with 'output'
-    if isinstance(result, dict):
-        if "output" in result and result["output"]:
-            assistant_content = result["output"]
-        elif "messages" in result and isinstance(result["messages"], list):
-            # try to extract text from first message
-            first = result["messages"][0]
-            assistant_content = getattr(first, "content", str(first))
-    else:
-        # If it's a Message object
-        if hasattr(result, "content"):
-            assistant_content = result.content
-        else:
-            assistant_content = str(result)
+    # Append to the global message list (for full conversation memory)
+    state["messages"].extend(normalized)
 
-    # Append assistant reply into the shared state as a {'role','content'} dict
-    if assistant_content:
-        state["messages"].append({"role": "assistant", "content": assistant_content})
+    # Optional debug
+    print(f"[DEBUG] {agent.__class__.__name__} output → {normalized[0]['content'][:120]}...\n")
 
-    # Return a simplified node payload (keep it minimal)
-    return {"messages": [{"role": "assistant", "content": assistant_content}]}
+    # Return what LangGraph expects (small delta)
+    return {"messages": normalized}
+
 
 # Define nodes for each agent
 def run_ideation(state: AgentState):
@@ -119,7 +144,6 @@ def run_presentation(state: AgentState):
 
 # Define the supervisor node
 def run_supervisor(state):
-    # List of all agent names except supervisor/finish
     agent_names = [
         AgentName.IDEATION.value,
         AgentName.RESEARCH_PLANNING.value,
@@ -128,16 +152,21 @@ def run_supervisor(state):
         AgentName.PRESENTATION.value,
         AgentName.HUMAN_IN_THE_LOOP.value,
     ]
-    # normalize messages into flat role/content format
     normalized_msgs = normalize_messages_for_langchain(state.get("messages", []))
-
-
-    # Pass agent_names along with messages
-    response = supervisor_chain.invoke({
+    result = supervisor_chain.invoke({
         "messages": normalized_msgs,
         "agent_names": ", ".join(agent_names)
     })
-    return response
+
+    # Normalize supervisor output
+    normalized = normalize_agent_output(result)
+    state["messages"].extend(normalized)
+
+    # Optional debugging
+    print(f"[SUPERVISOR] → {normalized[0]['content'][:120]}...\n")
+
+    return {"messages": normalized}
+
 
 # Define the conditional routing for the supervisor
 def route_supervisor(state: AgentState):
