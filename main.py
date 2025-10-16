@@ -13,7 +13,8 @@ thread_id = str(uuid.uuid4())
 config = {
     "configurable": {
         "thread_id": thread_id
-    }
+    },
+    "recursion_limit": 100
 }
 
 # Main application loop

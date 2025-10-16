@@ -12,12 +12,7 @@ cryptography==46.0.3
 dataclasses-json==0.6.7
 filetype==1.2.0
 frozenlist==1.8.0
-google-ai-generativelanguage==0.7.0
-google-api-core==2.26.0
-google-auth==2.41.1
-googleapis-common-protos==1.70.0
-grpcio==1.75.1
-grpcio-status==1.75.1
+langchain-ollama==0.2.3
 h11==0.16.0
 httpcore==1.0.9
 httpx==0.28.1
@@ -28,7 +23,7 @@ jsonpointer==3.0.0
 langchain==0.3.27
 langchain-community==0.3.31
 langchain-core==0.3.79
-langchain-google-genai==2.1.12
+ 
 langchain-text-splitters==0.3.11
 langgraph==0.6.10
 langgraph-checkpoint==2.1.2

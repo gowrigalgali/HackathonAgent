@@ -7,9 +7,10 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from typing import TypedDict, List
 from langchain_core.messages import HumanMessage
-from langchain_community.utilities import GitHubAPIWrapper
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.pydantic_v1 import BaseModel, Field
+# FIX: Import GitHubAPIWrapper from the correct module
+from langchain_community.utilities.github import GitHubAPIWrapper
+from langchain_ollama import ChatOllama
+from pydantic import BaseModel, Field
 from enum import Enum
 
 load_dotenv()
@@ -17,18 +18,39 @@ load_dotenv()
 # =====================================================================
 # === Configure the LLM and toolkits ===
 # =====================================================================
-# Initialize Gemini LLM with tool calling capabilities
-llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", tools=[]) # Initialize with empty tools, tools are bound per-agent
+# Initialize Ollama LLM (tools are bound per-agent via bind_tools)
+ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1")
+ollama_base_url = os.getenv("OLLAMA_BASE_URL")  # e.g. http://localhost:11434
+
+llm = ChatOllama(
+    model=ollama_model,
+    base_url=ollama_base_url if ollama_base_url else None
+)
 
 # Web search tool using Tavily
 web_search_tool = TavilySearchResults()
 
 # GitHub tools (using a simplified API wrapper for demonstration)
-# In a real scenario, you would create fine-grained tools for each GitHub action
-github_api_wrapper = GitHubAPIWrapper()
+# Instantiate only if env vars are present to avoid import-time failures
+github_repo = os.getenv("GITHUB_REPOSITORY")
+github_token = os.getenv("GITHUB_TOKEN")
+github_api_wrapper = None
+if github_repo:
+    try:
+        github_api_wrapper = GitHubAPIWrapper(
+            github_repository=github_repo,
+            github_token=github_token
+        )
+    except Exception:
+        github_api_wrapper = None
 @tool
 def github_create_branch(repo: str, branch: str) -> str:
     """Creates a new branch in a GitHub repository."""
+    if not github_api_wrapper:
+        return (
+            "GitHub not configured. Set GITHUB_REPOSITORY (and optionally GITHUB_TOKEN) "
+            "in your environment/.env."
+        )
     # This is a simplified function; you would use pygithub or similar here
     return github_api_wrapper.run(
         { "action": "create_branch", "repo": repo, "branch": branch }
@@ -37,6 +59,11 @@ def github_create_branch(repo: str, branch: str) -> str:
 @tool
 def github_create_pull_request(repo: str, title: str, head: str, base: str) -> str:
     """Creates a pull request on GitHub."""
+    if not github_api_wrapper:
+        return (
+            "GitHub not configured. Set GITHUB_REPOSITORY (and optionally GITHUB_TOKEN) "
+            "in your environment/.env."
+        )
     return github_api_wrapper.run(
         { "action": "create_pull_request", "repo": repo, "title": title, "head": head, "base": base }
     )
@@ -44,6 +71,11 @@ def github_create_pull_request(repo: str, title: str, head: str, base: str) -> s
 @tool
 def github_commit_file(repo: str, file_path: str, content: str, message: str) -> str:
     """Commits a file with specified content to a GitHub repository."""
+    if not github_api_wrapper:
+        return (
+            "GitHub not configured. Set GITHUB_REPOSITORY (and optionally GITHUB_TOKEN) "
+            "in your environment/.env."
+        )
     return github_api_wrapper.run(
         { "action": "commit_file", "repo": repo, "file_path": file_path, "content": content, "message": message }
     )
@@ -65,7 +97,7 @@ def vercel_deploy_hook() -> str:
 # === Helper to create a worker agent ===
 # =====================================================================
 def create_worker_agent(role: str, tools: list):
-    """Creates a tool-calling worker agent compatible with Gemini."""
+    """Creates a tool-calling worker agent compatible with Ollama."""
     prompt = ChatPromptTemplate.from_messages(
         [
             (
@@ -78,7 +110,7 @@ def create_worker_agent(role: str, tools: list):
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ]
     )
-    # Gemini requires tools to be bound directly to the LLM for tool calling
+    # Bind tools directly to the LLM for tool calling
     agent_runnable = create_tool_calling_agent(llm.bind_tools(tools), tools, prompt)
     agent_executor = AgentExecutor(agent=agent_runnable, tools=tools)
     return agent_executor
@@ -110,20 +142,12 @@ presentation_agent = create_worker_agent(
     "generating presentation content",
     tools=[web_search_tool]
 )
-def human_in_the_loop_node(state: AgentState):
-    """Node for human intervention."""
-    print("\n*** Human in the Loop required! ***")
-    print(f"Current Status: {state['status']}")
-    print(f"Last AI message: {state['messages'][-1].content}")
-    user_input = input("Please provide your feedback or input to continue: ")
-    return {
-        "messages": [HumanMessage(content=user_input)],
-        "status": "human_feedback"
-    }
+
 # =====================================================================
 # === Supervisor Agent logic remains the same ===
 # =====================================================================
 class AgentName(str, Enum):
+    SUPERVISOR = "supervisor"
     IDEATION = "ideation_agent"
     RESEARCH_PLANNING = "research_planning_agent"
     CODING = "coding_agent"
@@ -156,8 +180,13 @@ supervisor_prompt = ChatPromptTemplate.from_messages(
     ]
 )
 
-# The supervisor now also uses Gemini
+# The supervisor uses the same LLM
 supervisor_chain = (
     supervisor_prompt
     | llm.with_structured_output(SupervisorOutput)
 )
+
+# Simple human-in-the-loop node placeholder used by the graph
+def human_in_the_loop_node(state):
+    # In a real app, you would pause for human approval. Here we auto-route to coding.
+    return {"next_agent": AgentName.CODING.value}

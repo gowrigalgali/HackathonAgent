@@ -1,28 +1,22 @@
-from typing import TypedDict, List
+# state.py
+from typing import TypedDict, List, Union, Dict
 from langchain_core.messages import BaseMessage, HumanMessage
 
-# A shared state representing the state of the hackathon project
+MessageLike = Union[BaseMessage, Dict[str, str]]  # either Message object or {'role','content'}
+
 class AgentState(TypedDict):
-    # A list of messages to track conversation history
-    messages: List[BaseMessage]
-    # Current status of the project (e.g., "ideation", "research", "coding")
+    messages: List[MessageLike]
     status: str
-    # Output of the ideation phase
     idea: str
-    # Output of the research phase (e.g., market analysis, user stories)
     research: str
-    # Output of the planning phase (e.g., technical design)
     plan: str
-    # Output of the coding phase
     code: str
-    # URL of the deployed project on Vercel
     deployment_url: str
-    # Presentation content
     presentation: str
 
 def get_initial_state(user_input: str) -> AgentState:
     return AgentState(
-        messages=[HumanMessage(content=user_input)],
+        messages=[{"role": "user", "content": user_input}],  # canonicalize right away
         status="ideation",
         idea="",
         research="",
