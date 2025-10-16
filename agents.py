@@ -181,10 +181,10 @@ Valid agent transitions (rules):
 - If human clarification is needed → next_agent = "human_in_the_loop"
 
 Always respond in **structured JSON** matching this schema:
-{
+{{
   "next_agent": one of ["ideation_agent", "research_planning_agent", "coding_agent", "deployment_agent", "presentation_agent", "human_in_the_loop", "FINISH"],
   "response": "A concise explanation of your reasoning"
-}
+}}
 """
         ),
         MessagesPlaceholder(variable_name="messages"),
