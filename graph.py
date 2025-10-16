@@ -67,6 +67,10 @@ def normalize_messages_for_langchain(state_messages):
         # Last fallback: stringify
         normalized.append({"role": "user", "content": str(item)})
 
+    # Ensure conversation ends with user message for Gemini
+    if normalized and normalized[-1]["role"] == "assistant":
+        normalized.append({"role": "user", "content": "Please continue with your task."})
+    
     return normalized
 import json
 from langchain_core.messages import AIMessage
@@ -113,18 +117,22 @@ def normalize_agent_output(result):
 
 # Define helper to run an agent node
 def run_agent_node(agent, state: AgentState):
-    canonical_msgs = normalize_messages_for_langchain(state["messages"])
-    result = agent.invoke({"messages": canonical_msgs})
-    normalized = normalize_agent_output(result)
-
-    # Append to the global message list (for full conversation memory)
-    state["messages"].extend(normalized)
-
-    # Optional debug
-    print(f"[DEBUG] {agent.__class__.__name__} output → {normalized[0]['content'][:120]}...\n")
-
-    # Return what LangGraph expects (small delta)
-    return {"messages": normalized}
+    # Call the agent function directly
+    result = agent(state)
+    
+    # Extract messages from result
+    if "messages" in result:
+        new_messages = result["messages"]
+        # Append to the global message list
+        state["messages"].extend(new_messages)
+        
+        # Optional debug
+        if new_messages:
+            print(f"[DEBUG] Agent output → {new_messages[0].get('content', '')[:120]}...\n")
+        
+        return {"messages": new_messages}
+    else:
+        return {"messages": []}
 
 
 # Define nodes for each agent
@@ -145,50 +153,63 @@ def run_presentation(state: AgentState):
 
 # Define the supervisor node
 def run_supervisor(state):
-    agent_names = [
+    # Simple deterministic progression based on step count
+    supervisor_steps = state.get("supervisor_steps", 0)
+    state["supervisor_steps"] = supervisor_steps + 1
+    
+    # Define the pipeline order
+    pipeline = [
         AgentName.IDEATION.value,
-        AgentName.RESEARCH_PLANNING.value,
+        AgentName.RESEARCH_PLANNING.value, 
         AgentName.CODING.value,
         AgentName.DEPLOYMENT.value,
         AgentName.PRESENTATION.value,
-        AgentName.HUMAN_IN_THE_LOOP.value,
+        AgentName.FINISH.value
     ]
-
-    normalized_msgs = normalize_messages_for_langchain(state.get("messages", []))
-
-    # Invoke supervisor chain
-    result = supervisor_chain.invoke({
-        "messages": normalized_msgs,
-        "agent_names": ", ".join(agent_names)
-    })
-
-    # 🧩 Handle structured output properly
-    if isinstance(result, SupervisorOutput):
-        state["next_agent"] = result.next_agent.value
-        assistant_message = {
-            "role": "assistant",
-            "content": result.response
-        }
-        state["messages"].append(assistant_message)
-
-        print(f"[SUPERVISOR] → Next agent: {state['next_agent']}")
-        print(f"[SUPERVISOR] → Response: {result.response[:100]}...\n")
-
-        return {"messages": [assistant_message]}
-
-    # 🧯 Fallback: non-structured or unexpected response
-    normalized = normalize_agent_output(result)
-    state["messages"].extend(normalized)
-    state["next_agent"] = AgentName.FINISH.value  # stop safely
-    return {"messages": normalized}
+    
+    # Determine next agent based on step
+    if supervisor_steps < len(pipeline):
+        next_agent = pipeline[supervisor_steps]
+        response = f"Moving to step {supervisor_steps + 1}: {next_agent}"
+    else:
+        next_agent = AgentName.FINISH.value
+        response = "Pipeline completed successfully!"
+    
+    state["next_agent"] = next_agent
+    
+    assistant_message = {
+        "role": "assistant", 
+        "content": response
+    }
+    state["messages"].append(assistant_message)
+    
+    print(f"[SUPERVISOR] → Next agent: {next_agent}")
+    print(f"[SUPERVISOR] → Response: {response}\n")
+    
+    return {"messages": [assistant_message]}
 
 
 
 # Define the conditional routing for the supervisor
 def route_supervisor(state: AgentState):
-    if state.get("next_agent") is not None:
-        return state["next_agent"]
-    return AgentName.IDEATION.value
+    # Get the current step and determine next agent
+    supervisor_steps = state.get("supervisor_steps", 0)
+    
+    # Define the pipeline order
+    pipeline = [
+        AgentName.IDEATION.value,
+        AgentName.RESEARCH_PLANNING.value, 
+        AgentName.CODING.value,
+        AgentName.DEPLOYMENT.value,
+        AgentName.PRESENTATION.value,
+        AgentName.FINISH.value
+    ]
+    
+    # Determine next agent based on step
+    if supervisor_steps < len(pipeline):
+        return pipeline[supervisor_steps]
+    else:
+        return AgentName.FINISH.value
 
 # Create and configure the graph
 workflow = StateGraph(AgentState)
@@ -217,10 +238,9 @@ workflow.add_conditional_edges(
     }
 )
 
-# After each worker, route back to the supervisor
+# Add edges from each agent back to supervisor to continue the pipeline
 workflow.add_edge(AgentName.IDEATION.value, AgentName.SUPERVISOR.value)
-# FIX: Adding a link to the HITL node for human review before coding
-workflow.add_edge(AgentName.RESEARCH_PLANNING.value, AgentName.HUMAN_IN_THE_LOOP.value)
+workflow.add_edge(AgentName.RESEARCH_PLANNING.value, AgentName.SUPERVISOR.value)
 workflow.add_edge(AgentName.CODING.value, AgentName.SUPERVISOR.value)
 workflow.add_edge(AgentName.DEPLOYMENT.value, AgentName.SUPERVISOR.value)
 workflow.add_edge(AgentName.PRESENTATION.value, AgentName.SUPERVISOR.value)

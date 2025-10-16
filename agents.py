@@ -9,7 +9,7 @@ from typing import TypedDict, List
 from langchain_core.messages import HumanMessage
 # FIX: Import GitHubAPIWrapper from the correct module
 from langchain_community.utilities.github import GitHubAPIWrapper
-from langchain_ollama import ChatOllama
+from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -18,13 +18,16 @@ load_dotenv()
 # =====================================================================
 # === Configure the LLM and toolkits ===
 # =====================================================================
-# Initialize Ollama LLM (tools are bound per-agent via bind_tools)
-ollama_model = os.getenv("OLLAMA_MODEL", "llama3.1")
-ollama_base_url = os.getenv("OLLAMA_BASE_URL")  # e.g. http://localhost:11434
+# Initialize Google Gemini LLM
+gemini_api_key = os.getenv("GOOGLE_API_KEY")
+if not gemini_api_key:
+    raise ValueError("GOOGLE_API_KEY environment variable is required")
 
-llm = ChatOllama(
-    model=ollama_model,
-    base_url=ollama_base_url if ollama_base_url else None
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=gemini_api_key,
+    temperature=0.1,
+    convert_system_message_to_human=True
 )
 
 # Web search tool using Tavily
@@ -96,51 +99,100 @@ def vercel_deploy_hook() -> str:
 # =====================================================================
 # === Helper to create a worker agent ===
 # =====================================================================
-def create_worker_agent(role: str, tools: list):
-    """Creates a tool-calling worker agent compatible with Ollama."""
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                f"You are a helpful AI assistant specialized in {role}. "
-                "You have access to a set of tools to perform your tasks. "
-                "Use the tools provided to accomplish your goal."
-            ),
-            MessagesPlaceholder(variable_name="messages"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
-        ]
-    )
-    # Bind tools directly to the LLM for tool calling
-    agent_runnable = create_tool_calling_agent(llm.bind_tools(tools), tools, prompt)
-    agent_executor = AgentExecutor(agent=agent_runnable, tools=tools)
-    return agent_executor
+
+def create_worker_agent(role: str, tools: list, instruction: str = ""):
+    """Creates a simple agent that directly uses the LLM without complex tool calling."""
+    def agent_func(state):
+        # Get the last user message
+        messages = state.get("messages", [])
+        if not messages:
+            return {"messages": [{"role": "assistant", "content": "No input provided."}]}
+        
+        # Find the original user input
+        user_input = ""
+        for msg in messages:
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                user_input = msg.get("content", "")
+                break
+            elif hasattr(msg, "content") and hasattr(msg, "__class__"):
+                user_input = str(msg.content)
+                break
+        
+        if not user_input:
+            user_input = "AI recipe generator web app"  # fallback
+        
+        # Create the prompt based on role
+        system_prompt = f"""You are a helpful AI assistant specialized in {role}. 
+        You have access to a set of tools to perform your tasks. 
+        Prefer deterministic, concise outputs. If some information is missing, assume reasonable defaults or ask one concise question, then proceed.
+
+        Output policy: Unless explicitly told otherwise, RETURN ONLY JSON with no extra prose. 
+        Follow the exact JSON shape requested by the user/task. 
+        {instruction}
+
+        User input: {user_input}
+        
+        Please provide your response as JSON only."""
+        
+        try:
+            response = llm.invoke([HumanMessage(content=system_prompt)])
+            content = response.content.strip()
+            
+            # Clean up JSON if wrapped in markdown
+            if content.startswith('```json'):
+                content = content[7:-3].strip()
+            elif content.startswith('```'):
+                content = content[3:-3].strip()
+            
+            return {"messages": [{"role": "assistant", "content": content}]}
+        except Exception as e:
+            return {"messages": [{"role": "assistant", "content": f"Error: {str(e)}"}]}
+    
+    return agent_func
 
 # =====================================================================
 # === Define each agent ===
 # =====================================================================
 ideation_agent = create_worker_agent(
     "ideation and brainstorming",
-    tools=[web_search_tool]
+    tools=[web_search_tool],
+    instruction=(
+        "\nExpected JSON shape: [{{\"title\", \"pitch\", \"tech\", \"novelty\"}}] for one idea."
+    ),
 )
 
 research_planning_agent = create_worker_agent(
     "market research and project planning",
-    tools=[web_search_tool]
+    tools=[web_search_tool],
+    instruction=(
+        "\nExpected JSON: {{\"papers\": [ {\"title\", \"url\", \"summary\"} x5 ], "
+        "\"apis\": [ {\"name\", \"url\", \"summary\"} x3 ], "
+        "\"libraries\": [ {\"name\", \"url\", \"summary\"} x3 ]}}"
+    ),
 )
 
 coding_agent = create_worker_agent(
     "writing and managing code",
-    tools=[web_search_tool, github_create_branch, github_create_pull_request, github_commit_file]
+    tools=[web_search_tool, github_create_branch, github_create_pull_request, github_commit_file],
+    instruction=(
+        "\nExpected JSON: {{\"files\": [ {\"path\", \"content\"} ], \"readme\": string, \"requirements\": [string] }}."
+    ),
 )
 
 deployment_agent = create_worker_agent(
     "deploying web applications",
-    tools=[vercel_deploy_hook]
+    tools=[vercel_deploy_hook],
+    instruction=(
+        "\nExpected JSON: {{\"deploy_triggered\": boolean, \"url\": string | null, \"notes\": string }}."
+    ),
 )
 
 presentation_agent = create_worker_agent(
     "generating presentation content",
-    tools=[web_search_tool]
+    tools=[web_search_tool],
+    instruction=(
+        "\nExpected JSON: {{\"slides_outline\": [string], \"pitch\": string, \"demo_script\": string, \"resources\": [string], \"slides_link\": string | null }}."
+    ),
 )
 
 # =====================================================================
@@ -169,16 +221,25 @@ supervisor_prompt = ChatPromptTemplate.from_messages(
 You coordinate multiple specialized agents. Your job is to:
 1. Read the entire message history.
 2. Decide which agent should act next — or FINISH if the goal is complete.
-3. Provide a short response explaining your reasoning.
+3. If the user input is not clear, ask for clarification
+4. The sequence is as follows: ideation_agent -> research_planning_agent -> coding_agent -> deployment_agent -> presentation_agent -> FINISH
+5. Provide a short response explaining your reasoning.
 
-Valid agent transitions (rules):
-- If user introduces a *new idea* or goal → next_agent = "ideation_agent"
-- If idea is defined → next_agent = "research_planning_agent"
-- If planning/research is done → next_agent = "coding_agent"
-- If code is written → next_agent = "deployment_agent"
-- If deployed → next_agent = "presentation_agent"
-- If presentation is complete → next_agent = "FINISH"
-- If human clarification is needed → next_agent = "human_in_the_loop"
+CRITICAL: You must progress through the pipeline systematically. Do NOT repeat the same agent.For example, if ideation_agent is run then make sure the next agent is research_planning_agent.
+
+Pipeline flow (MUST follow this order):
+1. ideation_agent (generate ideas) → 
+2. research_planning_agent (research the idea) → 
+3. coding_agent (create code) → 
+4. deployment_agent (deploy) → 
+5. presentation_agent (create presentation) → 
+6. FINISH
+
+Rules:
+- Start with ideation_agent for new ideas
+- Move to next agent after each completes
+- NEVER repeat the same agent twice in a row
+- After presentation_agent, always go to FINISH
 
 Always respond in **structured JSON** matching this schema:
 {{

@@ -1,5 +1,5 @@
 # state.py
-from typing import TypedDict, List, Union, Dict
+from typing import TypedDict, List, Union, Dict, Optional
 from langchain_core.messages import BaseMessage, HumanMessage
 
 MessageLike = Union[BaseMessage, Dict[str, str]]  # either Message object or {'role','content'}
@@ -13,6 +13,10 @@ class AgentState(TypedDict):
     code: str
     deployment_url: str
     presentation: str
+    next_agent: Optional[str]
+    supervisor_steps: int
+    last_agent: Optional[str]
+    same_agent_count: int
 
 def get_initial_state(user_input: str) -> AgentState:
     return AgentState(
@@ -24,4 +28,8 @@ def get_initial_state(user_input: str) -> AgentState:
         code="",
         deployment_url="",
         presentation="",
+        next_agent=None,
+        supervisor_steps=0,
+        last_agent=None,
+        same_agent_count=0,
     )
