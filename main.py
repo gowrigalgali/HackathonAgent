@@ -30,14 +30,20 @@ def main():
         state = get_initial_state(user_input)
 
         # Stream the output from the graph
+        print("🧩 Starting workflow...\n")
+        
+        # Stream the workflow execution to see what's happening
         for s in app.stream(state, config=config):
-            print("🧩 Starting workflow...\n")
-
-            # The 'app.stream' yields the state change at each node.
-            # Find the value that was added or updated to print it.
+            print("🧩 Workflow step...\n")
+            
+            # Print each step
             for key, value in s.items():
                 if key != '__end__':
                     print(f"[{key}]: {value}")
+                    print("-" * 40)
+        
+        print("\n🎉 Workflow completed!")
+        print("=" * 50)
 
 if __name__ == "__main__":
     # Optional: Enable LangSmith for enhanced debugging

@@ -189,48 +189,48 @@ def _is_valid_agent_name(name: Optional[str]) -> bool:
 def run_agent_node(agent_callable, state: AgentState):
     """
     Generic runner for worker agents that returns a normalized assistant message list.
-    agent_callable can be either an AgentExecutor or a simple callable that accepts state.
     """
-    # Prepare canonical messages
-    canonical_msgs = normalize_messages_for_langchain(state.get("messages", []))
-
-    # Invoke the agent: it might be a callable or LangChain AgentExecutor
+    print(f"[DEBUG] run_agent_node called with agent: {agent_callable}")
+    
     try:
-        if hasattr(agent_callable, "invoke"):
-            # AgentExecutor / runnable
-            result = agent_callable.invoke({"messages": canonical_msgs})
+        # Call the agent function directly with state
+        result = agent_callable(state)
+        print(f"[DEBUG] Agent result: {result}")
+        
+        # Extract messages from result
+        if isinstance(result, dict) and "messages" in result:
+            new_messages = result["messages"]
+            # Append to the global message list
+            state.setdefault("messages", []).extend(new_messages)
+            
+            # Debug output
+            if new_messages:
+                content = new_messages[0].get("content", "") if new_messages else ""
+                print(f"[DEBUG] Agent output → {content[:200]}...")
+            
+            return {"messages": new_messages}
         else:
-            # Simple callable (as created in some designs)
-            result = agent_callable(state)
+            print(f"[ERROR] Agent returned unexpected result: {result}")
+            return {"messages": []}
+            
     except Exception as e:
         err_msg = f"Agent invocation error: {e}"
         print(f"[ERROR] {err_msg}")
-        state.setdefault("messages", []).append({"role": "assistant", "content": err_msg})
-        return {"messages": [{"role": "assistant", "content": err_msg}]}
-
-    # Normalize and append to state
-    normalized = normalize_agent_output(result)
-    state.setdefault("messages", []).extend(normalized)
-
-    # Debugging
-    try:
-        preview = normalized[0]["content"] if normalized and "content" in normalized[0] else str(normalized)
-        print(f"[DEBUG] {getattr(agent_callable, '__class__', agent_callable)} output → {preview[:200]}...")
-    except Exception:
-        pass
-
-    # Return the normalized chunk for LangGraph
-    return {"messages": normalized}
+        error_msg = {"role": "assistant", "content": err_msg}
+        state.setdefault("messages", []).append(error_msg)
+        return {"messages": [error_msg]}
 
 # ----------------------------
 # Worker wrappers that mark completion
 # ----------------------------
 def run_ideation(state: AgentState):
+    print(f"[DEBUG] run_ideation called with state: {state.get('messages', [])}")
     out = run_agent_node(ideation_agent, state)
     state.setdefault("completed_stages", [])
     if AgentName.IDEATION.value not in state["completed_stages"]:
         state["completed_stages"].append(AgentName.IDEATION.value)
     state.pop("next_agent", None)
+    print(f"[DEBUG] run_ideation completed, output: {out}")
     return out
 
 def run_research_planning(state: AgentState):
@@ -266,93 +266,39 @@ def run_presentation(state: AgentState):
     return out
 
 # ----------------------------
-# Supervisor node (robust)
+# Supervisor node (simplified)
 # ----------------------------
 def run_supervisor(state):
-    # Simple deterministic progression based on step count
-    supervisor_steps = state.get("supervisor_steps", 0)
-    state["supervisor_steps"] = supervisor_steps + 1
-    
-    # Define the pipeline order
-    pipeline = [
-        AgentName.IDEATION.value,
-        AgentName.RESEARCH_PLANNING.value, 
-        AgentName.CODING.value,
-        AgentName.DEPLOYMENT.value,
-        AgentName.PRESENTATION.value,
-        AgentName.FINISH.value
-    ]
-    normalized_msgs = normalize_messages_for_langchain(state.get("messages", []))
+    # Get completed stages
     completed = state.setdefault("completed_stages", [])
-
-    # Invoke the structured supervisor chain
-    raw_result = supervisor_chain.invoke({
-        "messages": normalized_msgs,
-        "agent_names": ", ".join(agent_names)
-    })
-
-    chosen_agent = None
-    response_text = None
-
-    # Extract structured SupervisorOutput if returned
-    try:
-        if isinstance(raw_result, SupervisorOutput):
-            chosen_agent = getattr(raw_result.next_agent, "value", str(raw_result.next_agent))
-            response_text = str(raw_result.response)
-        elif isinstance(raw_result, dict):
-            # fallback dictionary
-            chosen_agent = raw_result.get("next_agent")
-            response_text = raw_result.get("response", "")
-        elif hasattr(raw_result, "content"):
-            # try parsing content as JSON
-            content = raw_result.content
-            try:
-                parsed = json.loads(content)
-                chosen_agent = parsed.get("next_agent")
-                response_text = parsed.get("response", content)
-            except Exception:
-                response_text = str(content)
-        elif isinstance(raw_result, str):
-            try:
-                parsed = json.loads(raw_result)
-                chosen_agent = parsed.get("next_agent")
-                response_text = parsed.get("response", raw_result)
-            except Exception:
-                response_text = raw_result
-    except Exception as e:
-        response_text = f"Supervisor parsing error: {e}"
-
-    # Normalize if Enum-like
-    if hasattr(chosen_agent, "value"):
-        chosen_agent = chosen_agent.value
-
-    # Validate and enforce canonical progression
-    last_completed = completed[-1] if completed else None
-
-    if not _is_valid_agent_name(chosen_agent):
-        fallback = _next_pipeline_stage(completed)
-        print(f"[SUPERVISOR DEBUG] invalid next_agent ({chosen_agent}). Falling back -> {fallback}")
-        chosen_agent = fallback
+    
+    # Determine next agent based on what's been completed
+    if AgentName.IDEATION.value not in completed:
+        next_agent = AgentName.IDEATION.value
+        response = "Starting with ideation to generate project ideas."
+    elif AgentName.RESEARCH_PLANNING.value not in completed:
+        next_agent = AgentName.RESEARCH_PLANNING.value
+        response = "Moving to research and planning phase."
+    elif AgentName.CODING.value not in completed:
+        next_agent = AgentName.CODING.value
+        response = "Moving to coding phase to generate codebase."
+    elif AgentName.DEPLOYMENT.value not in completed:
+        next_agent = AgentName.DEPLOYMENT.value
+        response = "Moving to deployment phase."
+    elif AgentName.PRESENTATION.value not in completed:
+        next_agent = AgentName.PRESENTATION.value
+        response = "Moving to presentation phase."
     else:
-        # Prevent repeating the same stage twice in a row
-        if last_completed and chosen_agent == last_completed:
-            fallback = _next_pipeline_stage(completed)
-            print(f"[SUPERVISOR DEBUG] model picked already-completed stage ({chosen_agent}). Forcing -> {fallback}")
-            chosen_agent = fallback
+        next_agent = AgentName.FINISH.value
+        response = "Pipeline completed successfully!"
 
-    # If chosen agent is earlier than desired canonical stage, force the desired one
-    desired = _next_pipeline_stage(completed)
-    if chosen_agent not in (AgentName.HUMAN_IN_THE_LOOP.value, AgentName.FINISH.value) and chosen_agent != desired:
-        print(f"[SUPERVISOR DEBUG] chosen_agent ({chosen_agent}) != desired next ({desired}). Forcing -> {desired}")
-        chosen_agent = desired
-
-    # Persist next_agent decision and append assistant message
-    state["next_agent"] = chosen_agent
-    assistant_message = {"role": "assistant", "content": (response_text or f"Routing to {chosen_agent}")}
+    # Set next agent and add message
+    state["next_agent"] = next_agent
+    assistant_message = {"role": "assistant", "content": response}
     state.setdefault("messages", []).append(assistant_message)
 
-    print(f"[SUPERVISOR] → Next agent: {chosen_agent}")
-    print(f"[SUPERVISOR] → Response: {assistant_message['content'][:240]}")
+    print(f"[SUPERVISOR] → Next agent: {next_agent}")
+    print(f"[SUPERVISOR] → Response: {response}")
 
     return {"messages": [assistant_message]}
 

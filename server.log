@@ -1,0 +1,11 @@
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+E0000 00:00:1760648880.632214  889333 alts_credentials.cc:93] ALTS creds ignored. Not running on GCP and untrusted ALTS is not enabled.
+/Users/rakesh/Desktop/BTech_4/SEM_7/AgentAIv2/HackathonAgent/agents.py:34: LangChainDeprecationWarning: The class `TavilySearchResults` was deprecated in LangChain 0.3.25 and will be removed in 1.0. An updated version of the class exists in the :class:`~langchain-tavily package and should be used instead. To use it run `pip install -U :class:`~langchain-tavily` and import as `from :class:`~langchain_tavily import TavilySearch``.
+  web_search_tool = TavilySearchResults()
+🚀 Starting HackathonAgent Backend API...
+Frontend will be served from: ../frontend/out
+API endpoints available at: http://localhost:8000/api/
+ * Serving Flask app 'backend_api'
+ * Debug mode: on
+Address already in use
+Port 8000 is in use by another program. Either identify and stop that program, or start the server with a different port.
