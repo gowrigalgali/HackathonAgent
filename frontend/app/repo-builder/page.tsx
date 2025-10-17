@@ -28,17 +28,56 @@ export default function RepoBuilderPage() {
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [githubUrl, setGithubUrl] = useState("");
   const [copiedStates, setCopiedStates] = useState<{[key: string]: boolean}>({});
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+    // Load persisted code from localStorage
+    const savedCode = localStorage.getItem('hackathon-code');
+    const savedResult = localStorage.getItem('hackathon-result');
+    
+    if (savedCode) {
+      try {
+        const parsedCode = JSON.parse(savedCode);
+        setGeneratedCode(parsedCode);
+        console.log('Loaded saved code:', parsedCode);
+      } catch (e) {
+        console.error('Failed to parse saved code:', e);
+      }
+    } else if (savedResult) {
+      // Try to load code from main hackathon result
+      try {
+        const parsedResult = JSON.parse(savedResult);
+        if (parsedResult.generated_content && parsedResult.generated_content[2]) {
+          setGeneratedCode(parsedResult.generated_content[2]);
+          console.log('Loaded code from hackathon result:', parsedResult.generated_content[2]);
+        }
+      } catch (e) {
+        console.error('Failed to parse saved result:', e);
+      }
+    }
+  }, []);
+
+  // Save code to localStorage whenever it changes
+  useEffect(() => {
+    if (generatedCode && mounted) {
+      localStorage.setItem('hackathon-code', JSON.stringify(generatedCode));
+      console.log('Saved code to localStorage:', generatedCode);
+    }
+  }, [generatedCode, mounted]);
 
   // Get idea from URL params
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const idea = urlParams.get('idea');
-    const pitch = urlParams.get('pitch');
-    if (idea) {
-      setRepoName(idea.toLowerCase().replace(/\s+/g, '-'));
-      setDescription(pitch || `A ${idea} project`);
+    if (mounted) {
+      const urlParams = new URLSearchParams(window.location.search);
+      const idea = urlParams.get('idea');
+      const pitch = urlParams.get('pitch');
+      if (idea) {
+        setRepoName(idea.toLowerCase().replace(/\s+/g, '-'));
+        setDescription(pitch || `A ${idea} project`);
+      }
     }
-  }, []);
+  }, [mounted]);
 
   const generateCodebase = async () => {
     if (!repoName.trim()) return;
@@ -133,9 +172,57 @@ export default function RepoBuilderPage() {
   };
 
   const createGitHubRepo = async () => {
-    // This would integrate with GitHub API
-    alert(`Creating GitHub repository "${repoName}"...\n\nThis would:\n1. Create a new GitHub repository\n2. Initialize with the generated files\n3. Set up proper .gitignore\n4. Create initial commit\n5. Return the repository URL`);
+    if (!generatedCode) {
+      alert('Please generate code first before creating a repository.');
+      return;
+    }
+
+    try {
+      setConsoleLogs(prev => [...prev, `🚀 Creating GitHub repository: ${repoName}`]);
+      
+      const response = await fetch('/api/create-github-repo', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: repoName,
+          description: description,
+          files: generatedCode.files,
+          private: visibility === 'private'
+        }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        
+        setConsoleLogs(prev => [...prev, `✅ Repository created successfully`]);
+        setConsoleLogs(prev => [...prev, `📁 Added ${generatedCode.files.length} files`]);
+        setConsoleLogs(prev => [...prev, `📝 Created initial commit`]);
+        setConsoleLogs(prev => [...prev, `🎉 Repository ready at: ${result.repository_url}`]);
+        
+        // Set the GitHub URL
+        setGithubUrl(result.repository_url);
+        
+        // Show success message
+        alert(`✅ GitHub repository created successfully!\n\nRepository: ${result.repository_url}\n\nYou can now view your repository on GitHub!`);
+        
+      } else {
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        setConsoleLogs(prev => [...prev, `❌ Error: ${errorData.error}`]);
+        alert(`Failed to create GitHub repository: ${errorData.error}`);
+      }
+      
+    } catch (error) {
+      console.error('Error creating GitHub repository:', error);
+      setConsoleLogs(prev => [...prev, `❌ Network error: ${error}`]);
+      alert('Failed to create GitHub repository. Please check your connection and try again.');
+    }
   };
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8">

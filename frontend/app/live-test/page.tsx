@@ -28,33 +28,56 @@ export default function LiveTestPage() {
   const [testResults, setTestResults] = useState<TestResult[]>([]);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [deploymentUrl, setDeploymentUrl] = useState("");
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    // Initialize with some sample data
-    setLogs([
-      "[2024-01-15 10:30:15] 🚀 Starting deployment process...",
-      "[2024-01-15 10:30:16] 📦 Building application...",
-      "[2024-01-15 10:30:18] ✅ Build completed successfully",
-      "[2024-01-15 10:30:19] 🌐 Deploying to production...",
-      "[2024-01-15 10:30:22] ✅ Deployment successful!"
-    ]);
-
-    setTestResults([
-      { name: "Unit Tests", status: 'pass', duration: 1.2 },
-      { name: "Integration Tests", status: 'pass', duration: 3.4 },
-      { name: "API Tests", status: 'pass', duration: 2.1 },
-      { name: "UI Tests", status: 'fail', duration: 5.6, output: "Button click test failed" },
-    ]);
-
-    setMetrics([
-      { name: "CPU Usage", value: 45, unit: "%", status: 'good' },
-      { name: "Memory Usage", value: 78, unit: "%", status: 'warning' },
-      { name: "Response Time", value: 120, unit: "ms", status: 'good' },
-      { name: "Error Rate", value: 0.1, unit: "%", status: 'good' },
-    ]);
-
-    setDeploymentUrl("https://ai-recipe-generator.example.com");
+    setMounted(true);
   }, []);
+
+  useEffect(() => {
+    if (mounted) {
+      // Initialize with some sample data
+      setLogs([
+        "[2024-01-15 10:30:15] 🚀 Starting deployment process...",
+        "[2024-01-15 10:30:16] 📦 Building application...",
+        "[2024-01-15 10:30:18] ✅ Build completed successfully",
+        "[2024-01-15 10:30:19] 🌐 Deploying to production...",
+        "[2024-01-15 10:30:22] ✅ Deployment successful!"
+      ]);
+
+      setTestResults([
+        { name: "Unit Tests", status: 'pass', duration: 1.2 },
+        { name: "Integration Tests", status: 'pass', duration: 3.4 },
+        { name: "API Tests", status: 'pass', duration: 2.1 },
+        { name: "UI Tests", status: 'fail', duration: 5.6, output: "Button click test failed" },
+      ]);
+
+      setMetrics([
+        { name: "CPU Usage", value: 45, unit: "%", status: 'good' },
+        { name: "Memory Usage", value: 78, unit: "%", status: 'warning' },
+        { name: "Response Time", value: 120, unit: "ms", status: 'good' },
+        { name: "Error Rate", value: 0.1, unit: "%", status: 'good' },
+      ]);
+
+      // Try to get deployment URL from localStorage
+      const savedResult = localStorage.getItem('hackathon-result');
+      if (savedResult) {
+        try {
+          const parsedResult = JSON.parse(savedResult);
+          const deploymentUrl = parsedResult.generated_content?.[3]?.deployment_url;
+          if (deploymentUrl) {
+            setDeploymentUrl(deploymentUrl);
+          } else {
+            setDeploymentUrl("https://demo-project.example.com");
+          }
+        } catch (e) {
+          setDeploymentUrl("https://demo-project.example.com");
+        }
+      } else {
+        setDeploymentUrl("https://demo-project.example.com");
+      }
+    }
+  }, [mounted]);
 
   const runTests = async () => {
     setIsRunning(true);
@@ -126,6 +149,10 @@ export default function LiveTestPage() {
       default: return 'text-gray-500';
     }
   };
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8">

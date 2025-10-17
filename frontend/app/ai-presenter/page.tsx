@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Loader2, Download, Play, Share2, FileText, Video, ExternalLink } from "lucide-react";
 
 type PresentationData = {
@@ -24,6 +24,11 @@ export default function AIPresenterPage() {
   const [progress, setProgress] = useState(0);
   const [videoUrl, setVideoUrl] = useState("");
   const [isRendering, setIsRendering] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const generatePresentation = async () => {
     if (!projectTitle.trim()) return;
@@ -133,6 +138,10 @@ ${presentationData.resources.map(resource => `- ${resource}`).join('\n')}
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
   };
+
+  if (!mounted) {
+    return null;
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8">

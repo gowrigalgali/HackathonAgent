@@ -12,6 +12,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useEffect, useState } from "react";
 
 const links = [
   { href: "/", label: "Dashboard" },
@@ -24,6 +25,11 @@ const links = [
 export function Navbar() {
   const pathname = usePathname();
   const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/70 backdrop-blur supports-[backdrop-filter]:bg-background/60">
@@ -65,11 +71,13 @@ export function Navbar() {
           </a>
           <div className="flex items-center gap-2">
             <span className="hidden text-xs text-muted-foreground sm:inline">Theme</span>
-            <Switch
-              checked={theme === "dark"}
-              onCheckedChange={(v) => setTheme(v ? "dark" : "light")}
-              aria-label="Toggle theme"
-            />
+            {mounted && (
+              <Switch
+                checked={theme === "dark"}
+                onCheckedChange={(v) => setTheme(v ? "dark" : "light")}
+                aria-label="Toggle theme"
+              />
+            )}
           </div>
 
           <DropdownMenu>
